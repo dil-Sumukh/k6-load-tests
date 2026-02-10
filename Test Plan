@@ -1,0 +1,162 @@
+Test Plan: Load & Performance Testing for Optimized File Permission Agent
+1. Objective
+The primary objective of this test plan is to validate the performance, scalability, and functional correctness of the newly optimized File Permission Update Code under high-load conditions similar to the production incident where server outage occurred.
+
+This plan focuses on:
+
+Reproducing real-world traffic patterns observed during the incident timeframe.
+
+Generating controlled heavy server load using automated load testing.
+
+Evaluating whether the optimized agent performs reliably under stress.
+
+Ensuring no functional regressions after optimization.
+
+2. Background & Context
+During a recent production incident, a server outage was observed under high traffic conditions. One of the contributing factors identified was a server-intensive agent responsible for updating file permissions to public when a meeting becomes active. Under peak load, this agent frequently failed, impacting system stability.
+
+To address this, an optimized version of the agent has been developed. This test plan outlines the approach to validate its behavior under both functional and high-load scenarios.
+
+3. Scope
+In Scope
+API endpoints that were actively invoked during the incident timeframe.
+
+Load test automation suite creation for selected APIs.
+
+Stressing the server by injecting high traffic using load tests.
+
+Functional validation of the optimized agent.
+
+Load and performance testing of the optimized agent.
+
+Monitoring agent execution success, failures, and latency.
+
+4. Test Strategy
+4.1 Load Test Automation Suite
+Identify API endpoints that were heavily used during the incident window.
+
+Use OpenSearch/log analysis data to determine realistic request volume and concurrency.
+
+Automate these APIs into a load testing suite (e.g., JMeter / k6 / Gatling).
+
+Simulate peak and beyond-peak traffic to intentionally induce heavy server load.
+
+4.2 Load Injection Strategy
+Gradually ramp up load to baseline peak traffic.
+
+Increase load beyond peak levels to stress the server.
+
+Sustain load for a defined duration to observe agent stability.
+
+This induced load will recreate conditions similar to the outage scenario.
+
+5. Test Types
+5.1 Functional Testing (Optimized Agent)
+Purpose: Ensure the optimized agent works as expected under normal conditions.
+
+Test Scenarios:
+
+Agent triggers when a meeting is marked active.
+
+File permissions are updated to public correctly.
+
+Agent completes successfully without errors.
+
+Correct handling of edge cases (re-trigger, partial updates, retries).
+
+Acceptance Criteria:
+
+100% success rate for valid inputs.
+
+No data inconsistency or permission mismatch.
+
+5.2 Load Testing (Optimized Agent)
+Purpose: Validate agent performance under realistic high traffic.
+
+Test Scenarios:
+
+Concurrent meeting activations triggering the agent.
+
+Agent execution under sustained API traffic.
+
+Increased concurrency and throughput.
+
+Metrics to Capture:
+
+Agent execution time.
+
+Success vs failure count.
+
+CPU, memory, and thread utilization.
+
+API response times and error rates.
+
+Acceptance Criteria:
+
+Agent completes within acceptable time limits.
+
+Failure rate remains below defined threshold.
+
+5.3 Stress Testing
+Purpose: Identify breaking points and system limits.
+
+Test Scenarios:
+
+Load beyond peak production traffic.
+
+Sudden traffic spikes.
+
+Acceptance Criteria:
+
+System degrades gracefully.
+
+No cascading failures or server crashes.
+
+Agent failures (if any) are controlled and logged.
+
+6. Test Environment
+Environment: Dev Site 
+
+Database size: Medium
+
+7. Test Data
+Meetings with valid metadata.
+
+Files requiring permission updates.
+
+Mix of new and existing meetings.
+
+8. Monitoring & Reporting
+Monitoring Tools
+Application logs
+
+Agent execution logs
+
+Server metrics (CPU, Memory, Disk, Threads)
+
+API monitoring dashboards
+
+Reporting
+Test execution summary
+
+Performance comparison: Optimized agent 
+
+Identified bottlenecks
+
+9. Exit Criteria
+All functional test cases pass.
+
+Optimized agent performs reliably under peak and stress loads.
+
+No critical or high-severity performance issues remain open.
+
+Stakeholder sign-off obtained.
+
+10. Deliverables
+Load test automation suite
+
+Test execution reports
+
+Performance metrics dashboard
+
+Final test summary and recommendations

@@ -1,0 +1,254 @@
+name: K6 Load Test with Unique IPs
+
+on:
+  workflow_dispatch:
+    inputs:
+      vus:
+        description: 'Number of Virtual Users'
+        required: true
+        default: '50'
+        type: string
+      duration:
+        description: 'Test duration (e.g., 5m, 10m, 30m)'
+        required: true
+        default: '10m'
+        type: string
+      target_url:
+        description: 'Target URL to test'
+        required: true
+        default: 'https://dev.boarddocs.com/ind/globallogic/Board.nsf/BD-GetPacket'
+        type: string
+      runners:
+        description: 'Number of parallel runners (for unique IPs)'
+        required: true
+        default: '5'
+        type: string
+
+jobs:
+  # ============================================================================
+  # SETUP: Generate dynamic runner matrix
+  # ============================================================================
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      vus_per_runner: ${{ steps.calc.outputs.vus_per_runner }}
+    steps:
+      - name: Calculate VUs per runner
+        id: calc
+        run: |
+          TOTAL_VUS=${{ github.event.inputs.vus }}
+          RUNNERS=${{ github.event.inputs.runners }}
+          VUS_PER_RUNNER=$((TOTAL_VUS / RUNNERS))
+          echo "vus_per_runner=$VUS_PER_RUNNER" >> $GITHUB_OUTPUT
+          echo "Total VUs: $TOTAL_VUS, Runners: $RUNNERS, VUs per runner: $VUS_PER_RUNNER"
+
+      - name: Generate runner matrix
+        id: set-matrix
+        run: |
+          RUNNERS=${{ github.event.inputs.runners }}
+          MATRIX=$(seq 1 $RUNNERS | jq -R . | jq -s -c '{runner: .}')
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Matrix: $MATRIX"
+
+  # ============================================================================
+  # LOAD TEST: Run K6 on multiple runners for unique IPs
+  # ============================================================================
+  load-test:
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 50
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get Runner IP Address
+        id: ip
+        run: |
+          MY_IP=$(curl -s https://api.ipify.org || echo "unknown")
+          echo "Runner ${{ matrix.runner }} - Outbound IP: $MY_IP"
+          echo "ip=$MY_IP" >> $GITHUB_OUTPUT
+
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+
+      - name: Create K6 Test Script
+        run: |
+          cat > k6-test.js << 'SCRIPT'
+          import http from 'k6/http';
+          import { check, sleep } from 'k6';
+          import { Counter, Rate, Trend } from 'k6/metrics';
+
+          // Metrics
+          const successRate = new Rate('success_rate');
+          const responseTime = new Trend('response_time', true);
+
+          export const options = {
+              vus: parseInt(__ENV.VUS) || 10,
+              duration: __ENV.DURATION || '5m',
+              thresholds: {
+                  'http_req_duration': ['p(95)<10000'],
+                  'success_rate': ['rate>0.8'],
+              },
+              insecureSkipTLSVerify: true,
+          };
+
+          export default function() {
+              const targetUrl = __ENV.TARGET_URL;
+              
+              const params = {
+                  headers: {
+                      'User-Agent': `k6-runner-${__ENV.RUNNER_ID}/VU-${__VU}`,
+                      'Accept': '*/*',
+                  },
+                  timeout: '60s',
+              };
+              
+              const response = http.get(targetUrl, params);
+              
+              const isSuccess = response.status >= 200 && response.status < 400;
+              successRate.add(isSuccess);
+              responseTime.add(response.timings.duration);
+              
+              check(response, {
+                  'status is 2xx-3xx': (r) => r.status >= 200 && r.status < 400,
+                  'response time < 10s': (r) => r.timings.duration < 10000,
+              });
+              
+              if (!isSuccess) {
+                  console.error(`[ERROR] Status: ${response.status}, URL: ${targetUrl}`);
+              }
+              
+              sleep(Math.random() * 2 + 0.5);
+          }
+
+          export function setup() {
+              console.log('='.repeat(60));
+              console.log(`K6 Load Test - Runner ${__ENV.RUNNER_ID}`);
+              console.log(`IP: ${__ENV.RUNNER_IP}`);
+              console.log(`Target: ${__ENV.TARGET_URL}`);
+              console.log(`VUs: ${options.vus}, Duration: ${options.duration}`);
+              console.log('='.repeat(60));
+          }
+
+          export function handleSummary(data) {
+              return {
+                  [`summary-runner-${__ENV.RUNNER_ID}.json`]: JSON.stringify({
+                      runner: __ENV.RUNNER_ID,
+                      ip: __ENV.RUNNER_IP,
+                      totalRequests: data.metrics.http_reqs?.values?.count || 0,
+                      avgResponseTime: data.metrics.http_req_duration?.values?.avg || 0,
+                      p95ResponseTime: data.metrics.http_req_duration?.values['p(95)'] || 0,
+                      successRate: data.metrics.success_rate?.values?.rate || 0,
+                      errors: data.metrics.http_req_failed?.values?.passes || 0,
+                  }, null, 2),
+              };
+          }
+          SCRIPT
+
+      - name: Run K6 Load Test
+        env:
+          VUS: ${{ needs.setup.outputs.vus_per_runner }}
+          DURATION: ${{ github.event.inputs.duration }}
+          TARGET_URL: ${{ github.event.inputs.target_url }}
+          RUNNER_ID: ${{ matrix.runner }}
+          RUNNER_IP: ${{ steps.ip.outputs.ip }}
+        run: |
+          echo "Starting K6 test..."
+          echo "Runner: $RUNNER_ID"
+          echo "IP: $RUNNER_IP"
+          echo "VUs: $VUS"
+          echo "Duration: $DURATION"
+          echo "Target: $TARGET_URL"
+          
+          k6 run \
+            -e VUS=$VUS \
+            -e DURATION=$DURATION \
+            -e TARGET_URL="$TARGET_URL" \
+            -e RUNNER_ID=$RUNNER_ID \
+            -e RUNNER_IP=$RUNNER_IP \
+            --out json=results-runner-$RUNNER_ID.json \
+            k6-test.js
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: k6-results-runner-${{ matrix.runner }}
+          path: |
+            results-runner-${{ matrix.runner }}.json
+            summary-runner-${{ matrix.runner }}.json
+          retention-days: 30
+
+  # ============================================================================
+  # AGGREGATE: Combine results from all runners
+  # ============================================================================
+  aggregate-results:
+    needs: load-test
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: k6-results-runner-*
+          merge-multiple: true
+          path: results
+
+      - name: Aggregate and Display Results
+        run: |
+          echo "## K6 Distributed Load Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total VUs**: ${{ github.event.inputs.vus }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Duration**: ${{ github.event.inputs.duration }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Runners**: ${{ github.event.inputs.runners }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target**: ${{ github.event.inputs.target_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Results by Runner (Unique IPs)" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner | IP | Requests | Avg RT | P95 RT | Success Rate |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-----|----------|--------|--------|--------------|" >> $GITHUB_STEP_SUMMARY
+          
+          TOTAL_REQUESTS=0
+          TOTAL_SUCCESS=0
+          
+          for f in results/summary-runner-*.json; do
+            if [ -f "$f" ]; then
+              RUNNER=$(jq -r '.runner' "$f")
+              IP=$(jq -r '.ip' "$f")
+              REQUESTS=$(jq -r '.totalRequests' "$f")
+              AVG_RT=$(jq -r '.avgResponseTime | floor' "$f")
+              P95_RT=$(jq -r '.p95ResponseTime | floor' "$f")
+              SUCCESS=$(jq -r '(.successRate * 100) | floor' "$f")
+              
+              echo "| $RUNNER | $IP | $REQUESTS | ${AVG_RT}ms | ${P95_RT}ms | ${SUCCESS}% |" >> $GITHUB_STEP_SUMMARY
+              
+              TOTAL_REQUESTS=$((TOTAL_REQUESTS + REQUESTS))
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Requests**: $TOTAL_REQUESTS" >> $GITHUB_STEP_SUMMARY
+          echo "- **Unique IPs Used**: ${{ github.event.inputs.runners }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Aggregated Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-aggregated-results
+          path: results/
+          retention-days: 30
