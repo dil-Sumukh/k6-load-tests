@@ -1,5 +1,7 @@
 name: K6 Load Test with Unique IPs
 
+# Distributed load testing with unique IPs per runner
+
 on:
   workflow_dispatch:
     inputs:
