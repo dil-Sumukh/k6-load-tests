@@ -18,7 +18,7 @@ on:
       target_url:
         description: 'Target URL to test'
         required: true
-        default: 'https://dev.boarddocs.com/ind/globallogic/Board.nsf/BD-GetPacket'
+        default: 'https://go.boarddocs.com/support/Board.nsf/BD-GetPacket'
         type: string
       runners:
         description: 'Number of parallel runners (for unique IPs)'
