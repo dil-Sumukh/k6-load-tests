@@ -23,7 +23,7 @@ on:
       runners:
         description: 'Number of parallel runners (for unique IPs)'
         required: true
-        default: '5'
+        default: '15'
         type: string
 
 jobs:
